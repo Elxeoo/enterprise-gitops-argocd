@@ -1,0 +1,23 @@
+# Terraform local execution files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Secrets & Keys
+*.pem
+id_rsa*
+*.key
+*.tfvars
+*.tfvars.json
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
