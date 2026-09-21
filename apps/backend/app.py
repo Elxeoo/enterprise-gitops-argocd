@@ -1,7 +1,7 @@
 import os
 import socket
 from flask import Flask, jsonify
-import redis
+import redis # pyright: ignore[reportMissingImports]
 
 app = Flask(__name__)
 
