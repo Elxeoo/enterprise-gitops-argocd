@@ -3,7 +3,7 @@
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![Azure AKS](https://img.shields.io/badge/Azure_AKS-Managed_Cluster-0078D4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/kubernetes-service)
 [![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps_Engine-EF7B4D?logo=argo&logoColor=white)](https://argo-cd.readthedocs.io/)
-[![Terraform](https://img.shields.io/badge/Terraform-v1.9+-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-v1.8+-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
 [![Azure Container Registry](https://img.shields.io/badge/Azure_ACR-Standard-0078D4?logo=docker&logoColor=white)](https://azure.microsoft.com/en-us/products/container-registry)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -24,70 +24,53 @@ This project implements an end-to-end **GitOps Delivery Pipeline** where **Git s
 The platform separates external public access from sensitive internal microservices through Kubernetes network isolation (`ClusterIP` vs. `LoadBalancer`):
 
 ```mermaid
-graph TD
-    subgraph Public_Internet [External World]
-        Client([Web Browser / Client])
+flowchart TD
+    %% Clients & Git
+    subgraph External_Layer ["1. External & Source Control"]
+        Users(["🌐 Internet Users"]):::client
+        GitRepo["🐙 GitHub Repository<br/><code>Elxeoo/enterprise-gitops-argocd</code>"]:::git
     end
 
-    subgraph Azure_Cloud [Microsoft Azure - Sweden Central]
-        subgraph VNet ["Virtual Network (10.220.0.0/16)"]
-            ALB[Azure Public Load Balancer]
-            
-            subgraph AKS_Cluster ["AKS Cluster (Azure CNI Overlay)"]
-                subgraph Namespace_Default ["Namespace: default"]
-                    subgraph Tier_Frontend ["Frontend Layer"]
-                        FE_SVC[Frontend Service<br/>Type: LoadBalancer]
-                        FE_POD1[Nginx Pod 1]
-                        FE_POD2[Nginx Pod 2]
-                        FE_CFG[ConfigMap: default.conf & HTML]
-                    end
+    %% Cloud Infrastructure
+    subgraph Azure_Cloud ["2. Microsoft Azure Cloud (Sweden Central)"]
+        ALB["⚖️ Azure Public Load Balancer<br/><code>172.160.179.210:80</code>"]:::azure
+        ACR[("📦 Azure Container Registry<br/><code>acrenterprisecan01.azurecr.io</code>")]:::acr
 
-                    subgraph Tier_Backend ["Backend Layer (Private)"]
-                        BE_SVC[Backend Service<br/>Type: ClusterIP:5000]
-                        BE_POD1[Flask API Pod 1]
-                        BE_POD2[Flask API Pod 2]
-                        BE_POD3[Flask API Pod 3]
-                        BE_POD4[Flask API Pod 4]
-                    end
+        %% Kubernetes Cluster
+        subgraph AKS_Cluster ["3. AKS Cluster (Azure CNI Overlay)"]
+            subgraph Control_Plane ["GitOps Engine (Namespace: argocd)"]
+                ArgoCD["🐙 ArgoCD Controller & Server<br/><code>Automated Reconciliation Loop</code>"]:::argo
+            end
 
-                    subgraph Tier_Data ["Data Cache Layer (Private)"]
-                        RD_SVC[Redis Service<br/>Type: ClusterIP:6379]
-                        RD_POD[Redis Pod]
-                    end
-                end
-
-                subgraph Namespace_ArgoCD ["Namespace: argocd"]
-                    ARGO_CTRL[ArgoCD Application Controller]
-                    ARGO_SRV[ArgoCD API & Web Server]
-                    ARGO_REPO[ArgoCD Repo Server]
-                end
+            subgraph App_Workload ["Microservices (Namespace: default)"]
+                FE["🖥️ Frontend Tier (2 Replicas)<br/><code>Nginx Reverse Proxy :80</code>"]:::k8s
+                BE["⚙️ Backend Tier (4 Replicas)<br/><code>Python Flask REST API :5000</code>"]:::k8s
+                Redis[("💾 Data Cache Tier (1 Replica)<br/><code>Redis In-Memory :6379</code>")]:::db
             end
         end
-
-        subgraph ACR ["Azure Container Registry (ACR)"]
-            IMG_REPO[(acrenterprisecan01.azurecr.io<br/>backend:v1)]
-        end
     end
 
-    subgraph Git_Repository ["GitHub: Single Source of Truth"]
-        GIT_REPO[enterprise-gitops-argocd<br/>Branch: main]
-    end
+    %% Ingress & Microservice Traffic Flow
+    Users -->|HTTP :80| ALB
+    ALB -->|Route Public Traffic| FE
+    FE -->|Internal Proxy: /api/| BE
+    BE -->|TCP Read/Write Hits| Redis
 
-    %% Traffic Flow
-    Client -->|HTTP / :80| ALB
-    ALB --> FE_SVC
-    FE_SVC --> FE_POD1 & FE_POD2
-    FE_CFG -.->|Mounted into| FE_POD1 & FE_POD2
-    FE_POD1 & FE_POD2 -->|Reverse Proxy /api/| BE_SVC
-    BE_SVC --> BE_POD1 & BE_POD2 & BE_POD3 & BE_POD4
-    BE_POD1 & BE_POD2 & BE_POD3 & BE_POD4 -->|TCP :6379| RD_SVC
-    RD_SVC --> RD_POD
+    %% GitOps Reconciliation Flow
+    GitRepo -.->|Poll Desired State: HEAD| ArgoCD
+    ArgoCD ==>|Enforce State & Self-Heal| App_Workload
 
-    %% GitOps Reconciliation
-    GIT_REPO -.->|Pull Polling / Sync| ARGO_REPO
-    ARGO_REPO -.-> ARGO_CTRL
-    ARGO_CTRL ==>|Reconciles Desired State| Namespace_Default
-    AKS_Cluster -.->|AcrPull Managed Identity| IMG_REPO
+    %% Managed Identity Authentication
+    AKS_Cluster -.->|AcrPull Passwordless Identity| ACR
+
+    %% Node Styles
+    classDef client fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef git fill:#24292f,stroke:#f05032,stroke-width:2px,color:#ffffff;
+    classDef azure fill:#0078d4,stroke:#50e6ff,stroke-width:1px,color:#ffffff;
+    classDef acr fill:#0284c7,stroke:#38bdf8,stroke-width:2px,color:#ffffff;
+    classDef argo fill:#ef7b4d,stroke:#ffa07a,stroke-width:2px,color:#ffffff;
+    classDef k8s fill:#1d4ed8,stroke:#60a5fa,stroke-width:1px,color:#ffffff;
+    classDef db fill:#b91c1c,stroke:#f87171,stroke-width:1px,color:#ffffff;
 ```
 
 ---
