@@ -1,3 +1,4 @@
+# Version 1.1.0 - OIDC CI/CD Verified
 import os
 import socket
 from flask import Flask, jsonify
