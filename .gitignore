@@ -21,3 +21,5 @@ id_rsa*
 Thumbs.db
 .vscode/
 .idea/
+
+*.tfplan

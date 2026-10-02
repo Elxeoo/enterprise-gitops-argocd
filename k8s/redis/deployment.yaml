@@ -25,4 +25,11 @@ spec:
             memory: 64Mi
            limits:
             cpu: 100m
-            memory: 128Mi  
+            memory: 128Mi
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc

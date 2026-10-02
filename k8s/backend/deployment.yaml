@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
         - name: backend
-          image: acrenterprisecan01.azurecr.io/backend:v1
-          imagePullPolicy: IfNotPresent
+          image: acrenterprisecan01.azurecr.io/backend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 5000
           env:
