@@ -1,234 +1,157 @@
-# 🚀 Enterprise GitOps Platform with AKS, ACR & ArgoCD
+<p align="center">
+  <img src="docs/diagrams/hero.svg" width="100%" alt="enterprise-gitops-argocd: Git is the only way a change reaches the cluster. Terraform, AKS, ACR, Argo CD, GitHub Actions. nginx x2, Flask API x4, Redis with a 2Gi PVC. Automated sync with prune and selfHeal. OIDC login, no registry password.">
+</p>
 
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.30-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
-[![Azure AKS](https://img.shields.io/badge/Azure_AKS-Managed_Cluster-0078D4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/kubernetes-service)
-[![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps_Engine-EF7B4D?logo=argo&logoColor=white)](https://argo-cd.readthedocs.io/)
-[![Terraform](https://img.shields.io/badge/Terraform-v1.8+-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
-[![Azure Container Registry](https://img.shields.io/badge/Azure_ACR-Standard-0078D4?logo=docker&logoColor=white)](https://azure.microsoft.com/en-us/products/container-registry)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A small three-tier app on AKS that I only change **through Git**. Argo CD watches the `k8s/` folder and keeps the cluster identical to it. GitHub Actions builds the backend image, pushes it to ACR, and writes the new image tag back into `k8s/`. Nobody runs `kubectl apply` on the app.
 
-> **GitOps Platform delivering automated continuous delivery and self-healing drift reconciliation across a microservice workload.**
+Terraform creates the AKS cluster, the registry and the permission that connects them. I installed Argo CD with Helm and pointed it at this repo with one manifest.
 
 ---
 
-## 📌 Executive Summary
+## What runs
 
-Modern enterprise platform engineering mandates strict separation of concerns and auditability on Kubernetes clusters. 
+<p align="center">
+  <img src="docs/diagrams/runtime.svg" width="100%" alt="Users reach an Azure load balancer, which forwards to two nginx frontend pods; nginx proxies /api/ to four Flask backend pods on ClusterIP 5000, which use one Redis pod on ClusterIP 6379 with a 2Gi PVC. In the argocd namespace, Argo CD polls k8s/ on GitHub and syncs the default namespace. The kubelet identity pulls images from ACR with AcrPull.">
+</p>
 
-This project implements an end-to-end **GitOps Delivery Pipeline** where **Git serves as the Single Source of Truth**. Any desired state change—whether scaling replicas, updating application versions, or deploying configuration maps—is declared via version-controlled manifests. The in-cluster **ArgoCD** controller continuously reconciles real-world cluster state with the Git repository, detecting and self-healing configuration drift within seconds.
+| Tier | What it is | Reachable from |
+| :--- | :--- | :--- |
+| **frontend** | 2 × `nginx:1.25-alpine`. The ConfigMap holds the nginx config (serves the page, proxies `/api/` → `backend:5000`) and the HTML. | the internet, through `Service type: LoadBalancer` :80 |
+| **backend** | 4 × Flask on gunicorn, port 5000. `GET /` increments a counter in Redis and returns it along with the pod name. | inside the cluster only (ClusterIP) |
+| **redis** | 1 × `redis:7.2-alpine`, data on PVC `redis-pvc` (2Gi, RWO) | inside the cluster only (ClusterIP) |
 
----
+The backend has two health endpoints, and they check different things on purpose:
 
-## 🏗️ Architecture & Traffic Flow
+- **`/healthz`** (liveness) only answers "is the process alive".
+- **`/readyz`** (readiness) also pings Redis.
 
-The platform separates external public access from sensitive internal microservices through Kubernetes network isolation (`ClusterIP` vs. `LoadBalancer`):
-
-```mermaid
-flowchart TD
-    %% Clients & Git
-    subgraph External_Layer ["1. External & Source Control"]
-        Users(["🌐 Internet Users"]):::client
-        GitRepo["🐙 GitHub Repository<br/><code>Elxeoo/enterprise-gitops-argocd</code>"]:::git
-    end
-
-    %% Cloud Infrastructure
-    subgraph Azure_Cloud ["2. Microsoft Azure Cloud (Sweden Central)"]
-        ALB["⚖️ Azure Public Load Balancer<br/><code>Dynamically Assigned IP:80</code>"]:::azure
-        ACR[("📦 Azure Container Registry<br/><code>acrenterprisecan01.azurecr.io</code>")]:::acr
-
-        %% Kubernetes Cluster
-        subgraph AKS_Cluster ["3. AKS Cluster (Azure CNI Overlay)"]
-            subgraph Control_Plane ["GitOps Engine (Namespace: argocd)"]
-                ArgoCD["🐙 ArgoCD Controller & Server<br/><code>Automated Reconciliation Loop</code>"]:::argo
-            end
-
-            subgraph App_Workload ["Microservices (Namespace: default)"]
-                FE["🖥️ Frontend Tier (2 Replicas)<br/><code>Nginx Reverse Proxy :80</code>"]:::k8s
-                BE["⚙️ Backend Tier (4 Replicas)<br/><code>Python Flask REST API :5000</code>"]:::k8s
-                Redis[("💾 Data Cache Tier (1 Replica with PVC)<br/><code>Redis In-Memory :6379</code>")]:::db
-            end
-        end
-    end
-
-    %% Ingress & Microservice Traffic Flow
-    Users -->|HTTP :80| ALB
-    ALB -->|Route Public Traffic| FE
-    FE -->|Internal Proxy: /api/| BE
-    BE -->|TCP Read/Write Hits| Redis
-
-    %% GitOps Reconciliation Flow
-    GitRepo -.->|Poll Desired State: HEAD| ArgoCD
-    ArgoCD ==>|Enforce State & Self-Heal| App_Workload
-
-    %% Managed Identity Authentication
-    AKS_Cluster -.->|AcrPull Passwordless Identity| ACR
-
-    %% Node Styles
-    classDef client fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
-    classDef git fill:#24292f,stroke:#f05032,stroke-width:2px,color:#ffffff;
-    classDef azure fill:#0078d4,stroke:#50e6ff,stroke-width:1px,color:#ffffff;
-    classDef acr fill:#0284c7,stroke:#38bdf8,stroke-width:2px,color:#ffffff;
-    classDef argo fill:#ef7b4d,stroke:#ffa07a,stroke-width:2px,color:#ffffff;
-    classDef k8s fill:#1d4ed8,stroke:#60a5fa,stroke-width:1px,color:#ffffff;
-    classDef db fill:#b91c1c,stroke:#f87171,stroke-width:1px,color:#ffffff;
-```
+If Redis goes down, backend pods are taken out of rotation, but they are **not** restarted in a loop for something that isn't their fault.
 
 ---
 
-## 📸 Live Visual Evidence
+## How a change reaches the cluster
 
-### 1. Declarative Topology & Dynamic Rollback Verification
-ArgoCD application topology showing all Kubernetes resources in a healthy and synchronized state. Notice the retired replica set (`backend-778dbfdb5`) alongside the active 4-replica set (`backend-5545dbcf65`), demonstrating an instant GitOps rollback after simulating a degraded deployment:
+<p align="center">
+  <img src="docs/diagrams/delivery-loop.svg" width="100%" alt="1 git push under apps/backend, 2 Backend CI logs in with OIDC and builds, 3 pushes backend:sha and latest to ACR, 4 rewrites the image tag in k8s/backend/deployment.yaml and commits with skip ci, 5 Argo CD sees the new HEAD and syncs, 6 AKS rolls out the backend and the kubelet pulls the image via AcrPull. A drift loop shows selfHeal undoing a manual kubectl delete.">
+</p>
 
-![ArgoCD Live Topology](docs/images/argocd-live-topology.png)
+[`ci.yml`](.github/workflows/ci.yml) runs only when something under `apps/backend/**` changes:
 
-### 2. Network Topology & Traffic Flow
-Native ArgoCD network telemetry confirming strict perimeter security: only the frontend service interacts with the external Azure Load Balancer (dynamically assigned public IP), while Backend API and Redis instances are completely shielded inside private `ClusterIP` networks:
+1. **Log in without a secret.** `azure/login@v2` uses OIDC (`id-token: write`). The repo stores only the client, tenant and subscription IDs; there is no password and no client secret.
+2. **Build and push.** The image is built and pushed as `backend:<commit sha>` and `backend:latest`.
+3. **Write the tag back to Git.** `sed` sets the image line in `k8s/backend/deployment.yaml` to the commit SHA, and the bot commits that change with `[skip ci]`.
+4. **Argo CD does the rest.** It sees a new commit in `k8s/` and rolls it out. On the node side, the kubelet's managed identity has `AcrPull` on the registry ([`iam.tf`](terraform/iam.tf)), and the registry's admin user is disabled. No credential is stored anywhere.
 
-![ArgoCD Live Network Topology](docs/images/argocd-live-network.png)
-
----
-
-## 🔬 Core Engineering Drills (Resilience Drills)
-
-To validate platform robustness against real-world failures, three operational drills were executed live:
-
-### Drill 1: Automated Drift Detection & Self-Healing
-* **Scenario:** An unauthorized administrator accesses the cluster directly and runs `kubectl delete deployment backend` in production.
-* **Mechanism:** ArgoCD's reconciliation loop detects an immediate delta between the desired state in Git and the live cluster state (`etcd`).
-* **Result:** Because `selfHeal: true` is enforced, ArgoCD automatically intervened without human oversight, recreating the deployment, services, and associated pods within **8 seconds**.
-
-### Drill 2: Declarative Horizontal Pod Scaling
-* **Scenario:** Scaling the backend workload from 2 to 4 pods to meet surge demand without running `kubectl scale`.
-* **Mechanism:** Updated `spec.replicas: 4` in `k8s/backend/deployment.yaml`, committed, and pushed to `main`.
-* **Result:** ArgoCD pulled the commit, notified `kube-controller-manager`, and scheduled 2 additional worker pods across AKS nodes with zero request drops or downtime.
-
-### Drill 3: Broken Deployment & Zero-Downtime Rollback
-* **Scenario:** Pushed a non-existent container tag (`backend:v999-broken`) to simulate a critical CI/CD defect.
-* **Mechanism:** 
-  1. Worker nodes attempted to pull the broken image from ACR, triggering `ErrImagePull` and entering exponential `ImagePullBackOff`.
-  2. Kubernetes `RollingUpdate` strategy froze rollout progression because new pods failed readiness probes (`maxUnavailable: 25%`), keeping existing healthy pods running and serving user traffic uninterrupted.
-  3. ArgoCD flagged the application as `Progressing / Degraded`.
-  4. Executed `git revert HEAD --no-edit` and pushed to Git.
-* **Result:** ArgoCD reconciled the revert commit, immediately purged the failed replica set, and restored the application to 100% `Healthy` state.
+**Status, honestly:** steps 1-2 [ran green on 25 Sep](https://github.com/Elxeoo/enterprise-gitops-argocd/actions/runs/36166418106). Step 3, the tag write-back, was added on 2 Oct and hasn't been triggered yet, so `deployment.yaml` still says `:latest`.
 
 ---
 
-## 📂 Repository Layout
+## Drills
 
-```text
-├── .github/                     # CI/CD Workflows (Optional automation)
-├── apps/                        # Application Source Code Layer
-│   └── backend/
-│       ├── app.py               # 12-factor Flask REST API with Redis hit counter
-│       ├── Dockerfile           # Minimal non-root (appuser uid:1000) OCI container image
-│       └── requirements.txt     # Python dependencies (Flask, Redis, Gunicorn)
-├── bootstrap/                   # ArgoCD Application CRD (Automated sync & self-heal)
-│   └── argocd-app.yaml          
-├── docs/
-│   └── images/                  # Sanitized production architectural screenshots
-│       ├── argocd-live-topology.png
-│       └── argocd-live-network.png
-├── k8s/                         # Declarative Kubernetes Manifests (GitOps Source of Truth)
-│   ├── backend/
-│   │   ├── deployment.yaml      # Backend Deployment (4 replicas, liveness/readiness probes)
-│   │   └── service.yaml         # Backend ClusterIP service (:5000)
-│   ├── frontend/
-│   │   ├── configmap.yaml       # Nginx reverse proxy configuration & static UI
-│   │   ├── deployment.yaml      # Nginx frontend Deployment (2 replicas)
-│   │   └── service.yaml         # Azure LoadBalancer service (:80)
-│   └── redis/
-│       ├── deployment.yaml      # Redis in-memory cache Deployment
-│       ├── pvc.yaml             # Redis PVC
-│       └── service.yaml         # Redis ClusterIP service (:6379)
-├── terraform/                   # Infrastructure-as-Code (AzureRM Provider)
-│   ├── acr.tf                   # Azure Container Registry (Standard SKU, passwordless)
-│   ├── aks.tf                   # AKS Cluster (Azure CNI Overlay, SystemAssigned Identity)
-│   ├── iam.tf                   # Role Assignment: AcrPull for AKS Kubelet Identity
-│   ├── network.tf               # Resource Group, VNet (10.220.0.0/16), Subnet (10.220.1.0/24)
-│   ├── outputs.tf               # Cluster credentials and registry endpoints
-│   ├── providers.tf             # Terraform >= 1.8.0, azurerm >= 4.0
-│   └── variables.tf             # Region (swedencentral), CIDR blocks, naming conventions
-├── .gitignore                   # Ignores Terraform state, caches, and local secrets
-└── README.md                    # Enterprise architectural documentation
-```
+All three ran against the live cluster. Drills 2 and 3 are commits from 21 Sep 2026; drill 1 was done by hand with kubectl.
+
+**1 · Someone deletes production by hand.** I ran `kubectl delete deployment backend`. Argo CD saw that the live state no longer matched Git, and because `selfHeal: true` is set, it recreated the Deployment and its pods on its own, about **8 seconds** later.
+
+**2 · Scaling without kubectl.** I changed `replicas: 2 → 4` in Git and pushed ([`ce25aa4`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/ce25aa4)). Argo CD synced it and two more backend pods were scheduled.
+
+**3 · A broken release.** I pushed an image tag that doesn't exist, `backend:v999-broken` ([`0da6104`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/0da6104), 15:06).
+- The new pods went `ErrImagePull` → `ImagePullBackOff`.
+- The new pods never became ready, so the rolling update (default `maxUnavailable: 25%`) stopped. The old pods kept serving traffic.
+- Argo CD reported the app as *Degraded*.
+- I ran `git revert` ([`1d199d6`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/1d199d6), 15:09) and the app was *Healthy* again.
+
+From breaking it to fixing it took three minutes, and every step is in `git log`.
+
+The Argo CD view after drill 3. The retired ReplicaSet `backend-778dbfdb5` is still listed next to the active `backend-5545dbcf65`:
+
+![Argo CD application topology after the rollback](docs/images/argocd-live-topology.png)
+
+Only the frontend Service has a load balancer; backend and Redis stay ClusterIP:
+
+![Argo CD network view](docs/images/argocd-live-network.png)
 
 ---
 
-## 🛠️ Step-by-Step Deployment Guide
+## Design decisions
 
-### Prerequisites
-* [Azure CLI (`az`)](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) logged in (`az login`)
-* [Terraform v1.8+](https://www.terraform.io/downloads.html)
-* [kubectl](https://kubernetes.io/docs/tasks/tools/) & [Helm 3+](https://helm.sh/docs/intro/install/)
-* [Docker Desktop / Engine](https://docs.docker.com/get-docker/)
+**The Argo CD `Application` lives in `bootstrap/`, not in `k8s/`.** Argo CD syncs everything under `k8s/`. Keeping its own definition outside that folder means Argo CD never manages, or prunes, the object that configures it. I apply it once, by hand.
 
-### 1. Provision Cloud Infrastructure
+**`prune` and `selfHeal` are both on.** Git always wins. Deleting a file from Git deletes the object, and a manual change gets reverted. The trade-off is that an emergency `kubectl edit` won't stick, so even a hotfix goes through Git.
+
+**The image tag is the commit SHA.** With `:latest`, Git can't tell which build is running, and Argo CD has no diff to react to. A SHA in the manifest makes every rollout a visible commit, and every rollback a `git revert`.
+
+**OIDC and managed identity instead of keys.** No registry password and no client secret are stored in GitHub or in the cluster. That leaves nothing that can leak and nothing to rotate.
+
+---
+
+## Known gaps / what I'd change next
+
+- [ ] **Run the tag write-back once and check it.** Until it runs, the manifest says `:latest` with `imagePullPolicy: Always`, so a pod restarted later could pull a different image than the one Git describes.
+- [ ] **The bot pushes straight to `main`.** With branch protection it would have to open a PR instead, or be explicitly allowed.
+- [ ] **Argo CD itself is installed by hand.** A Helm install plus one `kubectl apply`. Next step: manage Argo CD from Git as well (app-of-apps).
+- [ ] **The CI identity was created by hand.** The app registration and federated credential aren't in Terraform yet.
+- [ ] **Hardening.** The API server and ACR are public. There are no NetworkPolicies. Redis runs without a password, as a single replica.
+- [ ] **The drills predate the Redis PVC**, which was added on 2 Oct. Restarting the Redis pod is the next drill, to prove the counter survives.
+
+---
+
+## History
+
+| Date | Change | Commit |
+| :--- | :--- | :--- |
+| 2026-09-20 | Terraform (AKS, ACR, AcrPull), Redis, Flask backend | [`2731aa7`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/2731aa7) · [`f310733`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/f310733) · [`4d65b34`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/4d65b34) |
+| 2026-09-21 | Frontend + Argo CD Application; drills 1-3 | [`5ad5a2c`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/5ad5a2c) · [`ce25aa4`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/ce25aa4) · [`0da6104`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/0da6104) · [`1d199d6`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/1d199d6) |
+| 2026-09-25 | CI: OIDC login, build and push to ACR | [`e86d591`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/e86d591) |
+| 2026-10-02 | CI writes the image tag back; Redis PVC; Application moved to `bootstrap/` | [`4ff0438`](https://github.com/Elxeoo/enterprise-gitops-argocd/commit/4ff0438) |
+| 2026-10-03 | Last deployment destroyed | Terraform state |
+
+---
+
+## Run it yourself
+
+You need the Azure CLI, Terraform ≥ 1.8, kubectl, Helm 3 and Docker. For CI you also need three repository secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. They belong to an identity that has a federated credential for this repo and push rights on the registry.
+
 ```bash
-cd terraform
-terraform init
-terraform plan -out=tfplan
-terraform apply tfplan
-cd ..
-```
+# infrastructure
+cd terraform && terraform init && terraform apply && cd ..
+az aks get-credentials --resource-group rg-enterprise-gitops --name aks-gitops-cluster
 
-### 2. Connect to AKS & Push Container Image
-```bash
-# Retrieve AKS credentials
-az aks get-credentials --resource-group rg-enterprise-gitops --name aks-gitops-cluster --overwrite-existing
-
-# Authenticate Docker against ACR and push backend image
+# first image (CI takes over after this)
 az acr login --name acrenterprisecan01
 docker build -t acrenterprisecan01.azurecr.io/backend:latest apps/backend
 docker push acrenterprisecan01.azurecr.io/backend:latest
-```
 
-### 3. Deploy ArgoCD Engine via Helm
-```bash
+# argo cd + the application
 helm repo add argo https://argoproj.github.io/argo-helm
-helm repo update
 helm install argo-cd argo/argo-cd -n argocd --create-namespace
-```
-
-### 4. Bootstrap GitOps Application
-```bash
-# Apply ArgoCD Application Custom Resource
 kubectl apply -f bootstrap/argocd-app.yaml
 
-# Verify synchronization
+# check
 kubectl get application -n argocd
-kubectl get pods,svc -n default
+kubectl get svc frontend            # EXTERNAL-IP = the app
+kubectl port-forward svc/argo-cd-argocd-server -n argocd 8080:443
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-### 5. Access Dashboards
-```bash
-# ArgoCD Web UI (Port-forward)
-kubectl port-forward service/argo-cd-argocd-server -n argocd 8080:443
-# Username: admin
-# Password retrieval:
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+Tear down with `terraform destroy` in `terraform/`.
+
+---
+
+## Repository layout
+
+```text
+.
+├── apps/backend/            # Flask API (app.py), Dockerfile (python:3.11-slim, non-root uid 1000), requirements
+├── bootstrap/argocd-app.yaml  # the Argo CD Application: k8s/ @ HEAD, recurse, prune + selfHeal
+├── k8s/                     # desired state; the only thing Argo CD applies
+│   ├── frontend/            # ConfigMap (nginx.conf + page), Deployment ×2, LoadBalancer :80
+│   ├── backend/             # Deployment ×4 (probes, requests/limits), ClusterIP :5000
+│   └── redis/               # Deployment, PVC 2Gi, ClusterIP :6379
+├── terraform/               # AKS (2 × D2s_v5, CNI overlay), ACR (admin off), AcrPull role, VNet 10.220.0.0/16
+├── docs/                    # diagrams + Argo CD screenshots
+└── .github/workflows/ci.yml # OIDC → build → push → write tag back
 ```
 
 ---
 
-## 🔐 Security & Hardening
-
-* **Cluster Access Context:** While GitOps aims to minimize direct cluster interactions, note that Terraform relies on the public API for infrastructure provisioning and `kubectl` is required to initially bootstrap ArgoCD.
-* **Passwordless Authentication:** ACR admin credentials are strictly disabled (`admin_enabled = false`). AKS worker nodes authenticate to ACR exclusively through Azure Active Directory Managed Identities via the `AcrPull` RBAC role.
-* **Network Segmentation:** Azure CNI Overlay ensures scalable pod IP allocation without depleting VNet subnet space. Backend API and Redis instances are bound to private `ClusterIP` definitions, isolated from the public internet.
-* **Least Privilege Container Runtime:** Containers execute as non-root users (`USER appuser`, UID 1000) inside slim base images to minimize attack surfaces.
-* **Health Probes:** Dual-stage `livenessProbe` and `readinessProbe` configs prevent traffic routing to unready pods and ensure automatic recovery from deadlocks.
-
----
-
-## 💰 FinOps & Cost Discipline
-
-Cloud resources are tracked and managed with complete lifecycle discipline:
-* Standardized VM instances (`Standard_D2s_v5`) tailored for predictable workloads without memory pressure.
-* Single-command teardown (`terraform destroy -auto-approve`) ensures zero orphaned cloud resources and eliminates unmetered test billing.
-
----
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
+<sub>Part of a three-project series: [azure-enterprise-network](https://github.com/Elxeoo/azure-enterprise-network) · [aks-cilium-ebpf-lab](https://github.com/Elxeoo/aks-cilium-ebpf-lab) · **enterprise-gitops-argocd** · MIT licensed</sub>
